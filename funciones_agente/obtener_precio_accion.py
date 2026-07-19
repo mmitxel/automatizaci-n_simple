@@ -1,8 +1,9 @@
-# Módulo para consultar precios de acciones en tiempo real usando yfinance
 import yfinance as yf
+from utils.fuzzy_match import fuzzy_match_ticker
 from utils.sanitizar import sanitizar
+from utils.ticker_search import search_ticker_online
 
-# Diccionario para mapear nombres comunes de empresas a sus Tickers de bolsa correspondientes
+# Common companies for fast, reliable lookups (no network needed)
 COMPANY_TICKERS = {
     "microsoft": "MSFT",
     "apple": "AAPL",
@@ -13,46 +14,79 @@ COMPANY_TICKERS = {
     "facebook": "META",
     "netflix": "NFLX",
     "nvidia": "NVDA",
-    "apple inc": "AAPL",
-    "microsoft corp": "MSFT",
-
+    "tesla": "TSLA",
+    "amd": "AMD",
+    "intel": "INTC",
+    "disney": "DIS",
+    "spotify": "SPOT",
+    "uber": "UBER",
+    "airbnb": "ABNB",
+    "paypal": "PYPL",
+    "coca cola": "KO",
+    "pepsi": "PEP",
+    "walmart": "WMT",
+    "boeing": "BA",
+    "ibm": "IBM",
 }
+
+
+def resolve_ticker(company_name):
+    """
+    Tries multiple strategies to turn a company name into a ticker symbol.
+    Goes from fastest/most reliable to slowest/least reliable.
+
+    Returns a tuple: (ticker, method_used) for debugging.
+    """
+    # Layer 1: Exact dictionary match (instant, most reliable)
+    ticker = COMPANY_TICKERS.get(company_name)
+    if ticker:
+        return ticker, "dictionary"
+
+    # Layer 2: Fuzzy match against dictionary (catches typos)
+    ticker = fuzzy_match_ticker(company_name, COMPANY_TICKERS)
+    if ticker:
+        return ticker, "fuzzy"
+
+    # Layer 3: Online search via Yahoo Finance (catches everything else)
+    ticker = search_ticker_online(company_name)
+    if ticker:
+        return ticker, "online search"
+
+    # Layer 4: Assume the user typed a raw ticker symbol like "TSLA"
+    return company_name.upper(), "raw input"
+
 
 def obtener_precio_accion(driver, user_input):
     """
-    Busca y retorna el precio actual de una acción utilizando la librería yfinance.
-    
-    Argumentos:
-        driver: Instancia de Selenium WebDriver (opcional).
-        user_input: Input del usuario que contiene el nombre de la empresa.
-    
-    Retorna:
-        El precio formateado como cadena o un mensaje explicativo si no se encuentra.
+    Main function called by the chatbot.
+    Cleans the input, resolves the ticker, fetches the price.
+
+    - driver: not used here (kept for interface consistency)
+    - user_input: the raw string the user typed
     """
-    # Sanitizar el input para extraer únicamente el nombre de la empresa o el ticker
+    # Clean up the input to extract just the company name
     company_name = sanitizar(user_input)
-    
-    # Buscar si el nombre está en nuestro mapeo interno de tickers
-    ticker = COMPANY_TICKERS.get(company_name)
-    
-    # Si no está en el mapa, asumimos que el usuario pudo haber ingresado el Ticker directamente
-    if not ticker:
-        ticker = company_name.upper()
+
+    # Figure out the ticker symbol using our layered approach
+    ticker, method = resolve_ticker(company_name)
 
     try:
-        # Inicializar el objeto Ticker de yfinance
+        # Create a yfinance Ticker object
         stock = yf.Ticker(ticker)
-        
-        # Obtener el historial del último día para extraer el precio de cierre más reciente
+
+        # Get the most recent trading day's data
         data = stock.history(period="1d")
-        
+
         if not data.empty:
-            # Extraer el valor de la columna 'Close' de la última fila disponible
-            price = data['Close'].iloc[-1]
-            return f"${price:.2f}"
+            # Get the closing price from the last row
+            price = data["Close"].iloc[-1]
+            return f"The price of {ticker} is ${price:.2f} (encontrado via {method})"
         else:
-            return "No se encontraron datos de cotización (puede que el símbolo sea incorrecto o esté deslistado)."
-            
+            return (
+                f"No price data found for '{company_name}' "
+                f"(resolved to {ticker} via {method}). "
+                f"The symbol might be incorrect or delisted."
+            )
+
     except Exception as e:
-        # Capturar errores de la API o problemas de red
-        return f"Error al consultar el precio de la acción: {e}"
+        return f"Error getting stock price: {e}"
